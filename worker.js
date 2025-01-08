@@ -25,8 +25,9 @@ async function transcodeVideo(job, inputPath, jobId) {
   const totalResolutions = resolutions.length;
   let completedResolutions = 0;
 
+  // Generate HLS playlists for each resolution
   await Promise.all(
-    resolutions.map((res) => {
+    resolutions.map((res, index) => {
       return new Promise((resolve, reject) => {
         const playlistPath = path.join(outputDir, `${res.height}p.m3u8`);
         const segmentFilename = path.join(outputDir, `${res.height}p_%03d.ts`);
@@ -58,6 +59,23 @@ async function transcodeVideo(job, inputPath, jobId) {
       });
     })
   );
+
+  // Create the master playlist
+  const masterPlaylistPath = path.join(outputDir, "master.m3u8");
+  const variantStreams = resolutions
+    .map(
+      (res) =>
+        `#EXT-X-STREAM-INF:BANDWIDTH=${
+          parseInt(res.bitrate) * 1000
+        },RESOLUTION=-2x${res.height}\n${res.height}p.m3u8`
+    )
+    .join("\n");
+
+  fs.writeFileSync(masterPlaylistPath, `#EXTM3U\n${variantStreams}`, "utf8");
+
+  console.log("Master playlist created at:", masterPlaylistPath);
+
+  return { outputDir, masterPlaylist: masterPlaylistPath };
 }
 
 const worker = new Worker(
