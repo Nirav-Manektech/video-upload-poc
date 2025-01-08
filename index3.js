@@ -5,7 +5,10 @@ const { Queue: QueueMQ } = require("bullmq");
 const express = require("express");
 const multer = require("multer");
 const path = require("path");
-const fs = require("fs");
+const mime = require("mime");
+const cors = require("cors");
+
+const VIDEO_DIRECTORY = path.join(__dirname, "output");
 
 // Redis connection settings
 const redisOptions = {
@@ -47,6 +50,8 @@ const run = async () => {
     serverAdapter,
   });
 
+  app.use(cors());
+
   app.use("/ui", serverAdapter.getRouter());
 
   // Upload route
@@ -66,6 +71,20 @@ const run = async () => {
       console.error("Error uploading video:", err);
       res.status(500).send({ error: "Failed to upload video." });
     }
+  });
+
+  app.get("/videos/:videoId/:file", (req, res) => {
+    const { videoId, file } = req.params;
+    const filePath = path.join(VIDEO_DIRECTORY, videoId, file);
+
+    res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+    // Check if the file exists
+    res.sendFile(filePath, (err) => {
+      if (err) {
+        console.error(`Error serving file ${filePath}`, err);
+        res.status(404).send("File not found");
+      }
+    });
   });
 
   // Start the server
