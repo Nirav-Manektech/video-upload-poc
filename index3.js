@@ -99,40 +99,76 @@ function setupBullMQProcessor(queueName) {
 // }
 
 async function transcodeVideo(job, inputPath, jobId) {
-  const resolutions = [144, 360, 720, 1080]; // Example resolutions
+  const resolutions = [
+    { height: 144, bitrate: "300k" },
+    { height: 360, bitrate: "500k" },
+    { height: 720, bitrate: "1000k" },
+    { height: 1080, bitrate: "3000k" },
+  ];
   const startTime = Date.now();
   let completed = 0;
   const totalResolutions = resolutions.length;
 
-  // Transcode each resolution
+  const outputDir = path.join(__dirname, "output", jobId);
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  const masterPlaylistPath = path.join(outputDir, "master.m3u8");
+
+  // Generate HLS playlists for each resolution
   await Promise.all(
-    resolutions.map((res) => {
+    resolutions.map((res, index) => {
       return new Promise((resolve, reject) => {
-        const jobOutputDir = path.join(__dirname, "output", jobId);
-        fs.mkdirSync(jobOutputDir, { recursive: true });
-        const outputPath = path.join(
-          __dirname,
-          `output/${jobId}`,
-          `video-${res}p.mp4`
-        );
-        exec(
-          `ffmpeg -i ${inputPath} -vf scale=-1:${res} ${outputPath}`,
-          async (err) => {
-            if (err) {
-              console.error(`Error transcoding ${res}p: ${err.message}`);
-              reject(err);
-            } else {
-              completed++;
-              const progress = Math.floor((completed / totalResolutions) * 100);
-              await job.updateProgress(progress); // Update progress in real-time
-              console.log(`Transcoded to ${res}p, Progress: ${progress}%`);
-              resolve();
-            }
+        const playlistPath = path.join(outputDir, `${res.height}p.m3u8`);
+        const segmentFilename = path.join(outputDir, `${res.height}p_%03d.ts`);
+
+        const cmd = `
+          ffmpeg -i "${inputPath}" \
+          -vf "scale=-2:${res.height}" \
+          -c:v libx264 -b:v ${res.bitrate} \
+          -hls_time 10 -hls_playlist_type vod \
+          -hls_segment_filename "${segmentFilename}" "${playlistPath}"
+        `
+          .replace(/\s+/g, " ")
+          .trim(); // Minimize whitespace in the command
+
+        exec(cmd, async (err) => {
+          if (err) {
+            console.error(`Error transcoding ${res.height}p: ${err.message}`);
+            reject(err);
+          } else {
+            completed++;
+            const progress = Math.floor((completed / totalResolutions) * 100);
+            await job.updateProgress(progress); // Update progress in real-time
+            console.log(`Transcoded to ${res.height}p, Progress: ${progress}%`);
+            resolve();
           }
-        );
+        });
       });
     })
   );
+
+  // Create the master playlist
+  await new Promise((resolve, reject) => {
+    const playlistContent = [
+      "#EXTM3U",
+      ...resolutions.map((res) => {
+        const playlistPath = `${res.height}p.m3u8`;
+        return `#EXT-X-STREAM-INF:BANDWIDTH=${
+          parseInt(res.bitrate) * 1000
+        },RESOLUTION=-2x${res.height}\n${playlistPath}`;
+      }),
+    ].join("\n");
+
+    fs.writeFile(masterPlaylistPath, playlistContent, (err) => {
+      if (err) {
+        console.error(`Error creating master playlist: ${err.message}`);
+        reject(err);
+      } else {
+        console.log("Master playlist created.");
+        resolve();
+      }
+    });
+  });
 
   // Calculate duration once all resolutions are done
   const endTime = Date.now();
