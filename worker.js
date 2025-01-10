@@ -2,6 +2,7 @@ const { Worker } = require("bullmq");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
+const { Sema } = require("async-sema");
 
 // Redis connection settings
 const redisOptions = {
@@ -11,11 +12,15 @@ const redisOptions = {
   tls: false,
 };
 
+// Throttling FFmpeg processes
+const maxConcurrentFFmpeg = 4; // Adjust based on system resources (e.g., number of CPU cores)
+const ffmpegSemaphore = new Sema(maxConcurrentFFmpeg);
+
 // Transcoding function
 async function transcodeVideo(job, inputPath, jobId) {
   const outputDir = path.join(__dirname, "output", jobId);
   fs.mkdirSync(outputDir, { recursive: true });
-
+  await ffmpegSemaphore.acquire(); // Throttle FFmpeg execution
   const cmd = "ffmpeg";
   const args = `
     -i "${inputPath}" \
@@ -33,55 +38,61 @@ async function transcodeVideo(job, inputPath, jobId) {
     .replace(/\s+/g, " ")
     .trim()
     .split(" ");
+  try {
+    return new Promise((resolve, reject) => {
+      const process = spawn(cmd, args, { shell: true });
 
-  return new Promise((resolve, reject) => {
-    const process = spawn(cmd, args, { shell: true });
+      let progress = 0;
+      let duration = 0;
 
-    let progress = 0;
-    let duration = 0;
+      process.stderr.on("data", (data) => {
+        const message = data.toString();
 
-    process.stderr.on("data", (data) => {
-      const message = data.toString();
-
-      // Extract total duration from FFmpeg logs
-      const durationMatch = message.match(/Duration: (\d+):(\d+):(\d+\.\d+)/);
-      if (durationMatch) {
-        const [_, hours, minutes, seconds] = durationMatch;
-        duration =
-          parseFloat(hours) * 3600 +
-          parseFloat(minutes) * 60 +
-          parseFloat(seconds);
-      }
-
-      // Extract progress from FFmpeg logs
-      const timeMatch = message.match(/time=(\d+):(\d+):(\d+\.\d+)/);
-      if (timeMatch) {
-        const [_, hours, minutes, seconds] = timeMatch;
-        const currentTime =
-          parseFloat(hours) * 3600 +
-          parseFloat(minutes) * 60 +
-          parseFloat(seconds);
-
-        if (duration > 0) {
-          progress = Math.min(Math.round((currentTime / duration) * 100), 100);
-          job.updateProgress(progress); // Update job progress
-          console.log(`Progress: ${progress}%`);
+        // Extract total duration from FFmpeg logs
+        const durationMatch = message.match(/Duration: (\d+):(\d+):(\d+\.\d+)/);
+        if (durationMatch) {
+          const [_, hours, minutes, seconds] = durationMatch;
+          duration =
+            parseFloat(hours) * 3600 +
+            parseFloat(minutes) * 60 +
+            parseFloat(seconds);
         }
-      }
-    });
 
-    process.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`FFmpeg process exited with code ${code}`));
-      }
-    });
+        // Extract progress from FFmpeg logs
+        const timeMatch = message.match(/time=(\d+):(\d+):(\d+\.\d+)/);
+        if (timeMatch) {
+          const [_, hours, minutes, seconds] = timeMatch;
+          const currentTime =
+            parseFloat(hours) * 3600 +
+            parseFloat(minutes) * 60 +
+            parseFloat(seconds);
 
-    process.on("error", (err) => {
-      reject(err);
+          if (duration > 0) {
+            progress = Math.min(
+              Math.round((currentTime / duration) * 100),
+              100
+            );
+            job.updateProgress(progress); // Update job progress
+            console.log(`Progress: ${progress}%`);
+          }
+        }
+      });
+
+      process.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`FFmpeg process exited with code ${code}`));
+        }
+      });
+
+      process.on("error", (err) => {
+        reject(err);
+      });
     });
-  });
+  } finally {
+    ffmpegSemaphore.release(); // Release the slot
+  }
 }
 
 const worker = new Worker(

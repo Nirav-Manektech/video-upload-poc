@@ -28,5 +28,8 @@
     "ioredis": "^5.4.2",
     "multer": "^1.4.5-lts.1",
     "nodemon": "^3.1.9"
+  },
+  "devDependencies": {
+    "async-sema": "^3.1.1"
   }
 }
