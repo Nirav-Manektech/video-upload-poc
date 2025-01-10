@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "concurrently \"nodemon index3.js\" node worker.js",
+    "dev": "concurrently \"nodemon index3.js\" \"node worker.js\"",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
