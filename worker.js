@@ -38,6 +38,7 @@ async function transcodeVideo(job, inputPath, jobId) {
     .replace(/\s+/g, " ")
     .trim()
     .split(" ");
+
   try {
     return new Promise((resolve, reject) => {
       const process = spawn(cmd, args, { shell: true });
@@ -80,6 +81,20 @@ async function transcodeVideo(job, inputPath, jobId) {
 
       process.on("close", (code) => {
         if (code === 0) {
+          // Generate the master.m3u8 playlist
+          const masterPlaylist = `
+#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=300000,RESOLUTION=256x144
+144p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360
+360p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=1280x720
+720p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1920x1080
+1080p.m3u8
+          `;
+          fs.writeFileSync(path.join(outputDir, "master.m3u8"), masterPlaylist);
+
           resolve();
         } else {
           reject(new Error(`FFmpeg process exited with code ${code}`));
