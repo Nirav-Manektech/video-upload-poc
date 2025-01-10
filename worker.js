@@ -16,14 +16,55 @@ const redisOptions = {
 const maxConcurrentFFmpeg = 4; // Adjust based on system resources (e.g., number of CPU cores)
 const ffmpegSemaphore = new Sema(maxConcurrentFFmpeg);
 
+//Compressing video
+async function compressVideo(inputPath, outputPath) {
+  // Compress the video to a lower bitrate and resolution
+  const cmd = "ffmpeg";
+  const args = [
+    "-i",
+    inputPath,
+    "-b:v",
+    "1000k", // Target bitrate
+    "-s",
+    "1280x720", // Target resolution (720p)
+    "-preset",
+    "fast", // Use a faster preset for compression
+    "-y",
+    outputPath, // Output compressed video file
+  ];
+
+  return new Promise((resolve, reject) => {
+    const process = spawn(cmd, args, { shell: true });
+
+    process.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Compression failed with code ${code}`));
+      }
+    });
+
+    process.on("error", (err) => {
+      reject(err);
+    });
+  });
+}
+
 // Transcoding function
 async function transcodeVideo(job, inputPath, jobId) {
+  // Step 1: Compress the video first
+  const startTime = Date.now();
   const outputDir = path.join(__dirname, "output", jobId);
   fs.mkdirSync(outputDir, { recursive: true });
   await ffmpegSemaphore.acquire(); // Throttle FFmpeg execution
+
+  const compressedVideoPath = path.join(outputDir, "compressed_video.mp4");
+  console.log(`Compressing video: ${inputPath}`);
+  await compressVideo(inputPath, compressedVideoPath);
+  console.log("compressed video path", compressedVideoPath);
   const cmd = "ffmpeg";
   const args = `
-    -i "${inputPath}" \
+    -i "${compressedVideoPath}" \
     -filter_complex \
       "[0:v]split=4[v144][v360][v720][v1080]; \
        [v144]scale=w=-2:h=144[v144out]; \
@@ -94,8 +135,10 @@ async function transcodeVideo(job, inputPath, jobId) {
 1080p.m3u8
           `;
           fs.writeFileSync(path.join(outputDir, "master.m3u8"), masterPlaylist);
-
           resolve();
+          const endTime = Date.now();
+          const duration = (endTime - startTime) / 1000;
+          console.log(`totalDuration: ${duration}`);
         } else {
           reject(new Error(`FFmpeg process exited with code ${code}`));
         }
